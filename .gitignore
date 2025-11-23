@@ -1,0 +1,25 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Model outputs
+out/
+out_minilm/
+out_tiny/
+tune_logs/
+
+# Large HF model files
+*.bin
+*.safetensors
+*.pt
+
+# VSCode
+.vscode/
+
+# Environment files
+.env
+.DS_Store
+
+# Conda
+*.conda
+*.lock
