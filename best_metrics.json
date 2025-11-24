@@ -1,0 +1,27 @@
+{
+  "model_name": "nreimers/MiniLM-L6-H384-uncased",
+  "hyperparameters": {
+    "learning_rate": 3e-5,
+    "batch_size": 16,
+    "epochs": 5,
+    "max_length": 256
+  },
+  "dev_metrics": {
+    "macro_f1": 0.473,
+    "pii_f1": 0.464,
+    "non_pii_f1": 0.497,
+    "per_entity_f1": {
+      "CITY": 0.392,
+      "CREDIT_CARD": 0.262,
+      "DATE": 0.500,
+      "EMAIL": 0.440,
+      "LOCATION": 0.667,
+      "PERSON_NAME": 0.632,
+      "PHONE": 0.421
+    }
+  },
+  "latency_cpu": {
+    "p50_ms": 11.79,
+    "p95_ms": 14.64
+  }
+}

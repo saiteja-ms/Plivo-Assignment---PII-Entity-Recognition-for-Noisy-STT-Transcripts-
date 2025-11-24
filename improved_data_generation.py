@@ -1,206 +1,265 @@
 import json
 import random
 import os
-from faker import Faker
-from tqdm import tqdm
-
-# Initialize Faker
-fake = Faker()
+import string
 
 # ----------------------------------------------------
-# CONFIGURATION
+# CONFIG
 # ----------------------------------------------------
-OUTPUT_DIR = "./data"
 TRAIN_SIZE = 1000
 DEV_SIZE = 200
-TEST_SIZE = 200
+TEST_SIZE = 150       # you can change this freely
+OUTPUT_DIR = "./data_advanced"
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ----------------------------------------------------
-# NOISE FUNCTIONS (Simulating STT Errors)
+# STATIC DICTIONARIES
 # ----------------------------------------------------
-def noisy_digits(digits_str):
-    """
-    Converts '123' -> 'one two three', '1 2 3', or 'one 2 three'.
-    STT often spells out digits or puts spaces between them.
-    """
-    digit_map = {
-        '0': ['zero', 'oh', '0'],
-        '1': ['one', '1'],
-        '2': ['two', '2'],
-        '3': ['three', '3'],
-        '4': ['four', '4'],
-        '5': ['five', '5'],
-        '6': ['six', '6'],
-        '7': ['seven', '7'],
-        '8': ['eight', '8'],
-        '9': ['nine', '9']
-    }
-    
+FILLERS = ["uh", "um", "you know", "like", "hmm", "err", "ah", "basically", "actually"]
+HOMOPHONES = {
+    "to": ["two", "too"],
+    "for": ["four"],
+    "eight": ["ate"],
+    "won": ["one"],
+    "there": ["their", "theyre"],
+    "your": ["you're"],
+}
+ASR_MERGE_SPLIT = [
+    ("credit card", "creditcard"),
+    ("phone number", "phonenumber"),
+    ("email id", "emailid"),
+    ("at gmail dot com", "atgmaildotcom"),
+]
+
+MISSPELLINGS = {
+    "gmail": ["g male", "gee mail", "g mail"],
+    "outlook": ["out look", "out luk"],
+    "san francisco": ["sanfransisco", "san fransisco"],
+    "chennai": ["chen nai", "chenn i"],
+}
+
+EMAIL_DOMAINS = ["gmail", "yahoo", "outlook", "hotmail"]
+CITY_LIST = ["chennai", "bangalore", "delhi", "mumbai", "new york", "san francisco", "london"]
+LOCATION_LIST = ["fifth avenue", "main street", "church street", "mg road", "brigade road"]
+NAMES = ["john doe", "alex kumar", "sarah thomas", "deepa sharma", "raj patel", "maria fernandes"]
+
+MONTHS = ["january", "february", "march", "april", "may", "june",
+          "july", "august", "september", "october", "november", "december"]
+
+DIGIT_WORDS = {
+    "0": ["zero", "oh"],
+    "1": ["one", "won"],
+    "2": ["two", "to", "too"],
+    "3": ["three"],
+    "4": ["four", "for"],
+    "5": ["five"],
+    "6": ["six"],
+    "7": ["seven"],
+    "8": ["eight", "ate"],
+    "9": ["nine"],
+}
+
+# ----------------------------------------------------
+# ADVANCED NOISE FUNCTIONS
+# ----------------------------------------------------
+
+def random_letter_noise(word):
+    """Randomly delete/insert/substitute characters."""
+    if len(word) <= 3:
+        return word
+
+    if random.random() < 0.1:  # deletion
+        idx = random.randint(0, len(word) - 1)
+        return word[:idx] + word[idx+1:]
+
+    if random.random() < 0.1:  # substitution
+        idx = random.randint(0, len(word) - 1)
+        return word[:idx] + random.choice(string.ascii_lowercase) + word[idx+1:]
+
+    if random.random() < 0.05:  # insertion
+        idx = random.randint(0, len(word) - 1)
+        return word[:idx] + random.choice(string.ascii_lowercase) + word[idx:]
+
+    return word
+
+
+def apply_homophones(text):
+    words = text.split()
     out = []
-    for d in digits_str:
-        if d in digit_map:
-            # 80% chance of being a word, 10% digit char, 10% kept as is
-            val = random.choices(digit_map[d], weights=[0.8, 0.1, 0.1], k=1)[0]
-            out.append(val)
+    for w in words:
+        if w in HOMOPHONES and random.random() < 0.3:
+            out.append(random.choice(HOMOPHONES[w]))
         else:
-            out.append(d) 
+            out.append(w)
     return " ".join(out)
 
-def noisy_email(email):
-    """
-    john@gmail.com -> john at gmail dot com
-    STT often misinterprets symbols.
-    """
-    # 90% chance to replace @ and . with words
-    if random.random() < 0.9:
-        return email.replace("@", " at ").replace(".", " dot ")
-    return email
 
-def noisy_date(date_obj):
-    """
-    2023-01-01 -> january first twenty twenty three
-    """
-    try:
-        # Base format: January 01 2023
-        d = date_obj.strftime("%B %d %Y") 
-        
-        # Add ordinal suffixes (st, nd, rd, th) roughly
-        day_num = int(date_obj.strftime("%d"))
-        suffix = "th"
-        if day_num in [1, 21, 31]: suffix = "st"
-        elif day_num in [2, 22]: suffix = "nd"
-        elif day_num in [3, 23]: suffix = "rd"
-        
-        # Replace the number in the string
-        d = d.replace(str(day_num).zfill(2), f"{day_num}{suffix}")
-        return d.lower()
-    except:
-        return str(date_obj)
+def apply_merge_split_noise(text):
+    if random.random() < 0.2:
+        src, tgt = random.choice(ASR_MERGE_SPLIT)
+        return text.replace(src, tgt)
+    return text
 
-# ----------------------------------------------------
-# GENERATOR LOGIC
-# ----------------------------------------------------
-def generate_sample(uid):
-    """
-    Builds the sentence chunk-by-chunk to ensure character offsets 
-    are perfectly aligned with the generated text.
-    """
-    
-    # --- 1. Entity Generators ---
-    def get_credit_card():
-        return noisy_digits(fake.credit_card_number()), "CREDIT_CARD"
-    
-    def get_phone():
-        return noisy_digits(fake.msisdn()), "PHONE"
-    
-    def get_email():
-        return noisy_email(fake.email()), "EMAIL"
-    
-    def get_person():
-        return fake.name().lower(), "PERSON_NAME"
-    
-    def get_city():
-        return fake.city().lower(), "CITY"
-    
-    def get_location():
-        # Clean newlines from addresses
-        return fake.address().replace("\n", " ").lower(), "LOCATION"
-    
-    def get_date():
-        return noisy_date(fake.date_object()), "DATE"
 
-    # --- 2. Templates ---
-    # Lists of [Context String, Generator Function, Context String...]
-    templates = [
-        # Credit Card scenarios
-        ["my credit card number is ", get_credit_card, " thank you"],
-        ["charge the ", get_credit_card, " for the payment"],
-        ["i am paying with card ", get_credit_card],
-        
-        # Phone scenarios
-        ["call me at ", get_phone],
-        ["my number is ", get_phone, " or try ", get_phone],
-        ["reach ", get_person, " at ", get_phone],
-        
-        # Email scenarios
-        ["email me at ", get_email],
-        ["my address is ", get_email, " and i live in ", get_city],
-        ["contact ", get_email, " regarding the issue"],
-        
-        # Person/Location scenarios
-        ["my name is ", get_person, " and i am from ", get_city],
-        ["is ", get_person, " located at ", get_location, "?"],
-        ["i visited ", get_location, " on ", get_date],
-        
-        # Mixed scenarios
-        ["confirming details for ", get_person, " phone ", get_phone, " date ", get_date],
-        ["date of birth is ", get_date],
-        ["send the package to ", get_city, " specifically ", get_location],
-    ]
+def apply_misspellings(text):
+    for k, vlist in MISSPELLINGS.items():
+        if k in text and random.random() < 0.2:
+            text = text.replace(k, random.choice(vlist))
+    return text
 
-    selected_template = random.choice(templates)
-    
-    final_text_parts = []
-    final_entities = []
-    cursor = 0 # Tracks the current character character index
-    
-    # Optional: Add filler word at start ("um", "uh")
+
+def random_filler_noise(text):
     if random.random() < 0.3:
-        f = random.choice(["um", "uh", "ok", "so"])
-        final_text_parts.append(f)
-        cursor += len(f) + 1 # +1 for the space we'll add during join
-    
-    # --- 3. Construction Loop ---
-    for item in selected_template:
-        chunk_text = ""
-        label = "O"
-        
-        if callable(item):
-            # It's an entity generator
-            chunk_text, label = item()
+        filler = random.choice(FILLERS)
+        insert_pos = random.choice(["start", "end", "middle"])
+        words = text.split()
+
+        if insert_pos == "start":
+            return filler + " " + text
+        elif insert_pos == "end":
+            return text + " " + filler
         else:
-            # It's static context text
-            chunk_text = item
-            # Randomly insert filler words inside context
-            if random.random() < 0.05: 
-                 chunk_text += " uh "
+            idx = random.randint(0, len(words) - 1)
+            words.insert(idx, filler)
+            return " ".join(words)
 
-        # Clean text
-        chunk_text = chunk_text.strip()
-        if not chunk_text: continue
+    return text
 
-        # Add to list
-        final_text_parts.append(chunk_text)
-        
-        # Record entity if it's not O
-        if label != "O":
-            final_entities.append({
-                "start": cursor,
-                "end": cursor + len(chunk_text),
-                "label": label
-            })
-            
-        # Update cursor: length of text + 1 for the space
-        cursor += len(chunk_text) + 1
-        
-    final_string = " ".join(final_text_parts)
-    
+
+def advanced_noise_pipeline(text):
+    text = apply_homophones(text)
+    text = apply_merge_split_noise(text)
+    text = apply_misspellings(text)
+
+    noisy_words = []
+    for w in text.split():
+        if random.random() < 0.15:
+            noisy_words.append(random_letter_noise(w))
+        else:
+            noisy_words.append(w)
+    text = " ".join(noisy_words)
+
+    text = random_filler_noise(text)
+    return text
+
+# ----------------------------------------------------
+# ENTITY GENERATORS
+# ----------------------------------------------------
+
+def spelled_out_digits(n_digits=16):
+    digits = [str(random.randint(0, 9)) for _ in range(n_digits)]
+    return " ".join(random.choice(DIGIT_WORDS[d]) for d in digits)
+
+
+def random_email():
+    name = random.choice(["john", "alex", "sarah", "deepa", "raj", "maria"])
+    lname = random.choice(["doe", "kumar", "patel", "sharma", "thomas"])
+    domain = random.choice(EMAIL_DOMAINS)
+    tld = random.choice(["com", "co", "org", "in"])
+    return f"{name} dot {lname} at {domain} dot {tld}"
+
+
+def random_date():
+    day = random.randint(1, 28)
+    day_map = {
+        1:"first",2:"second",3:"third",4:"fourth",5:"fifth",6:"sixth",7:"seventh",8:"eighth",9:"ninth",
+        10:"tenth",11:"eleventh",12:"twelfth",13:"thirteenth",14:"fourteenth",15:"fifteenth",
+        16:"sixteenth",17:"seventeenth",18:"eighteenth",19:"nineteenth",20:"twentieth",
+        21:"twenty first",22:"twenty second",23:"twenty third",24:"twenty fourth",
+        25:"twenty fifth",26:"twenty sixth",27:"twenty seventh",28:"twenty eighth"
+    }
+    month = random.choice(MONTHS)
+    year = random.choice(["twenty nineteen", "twenty twenty", "twenty twenty one"])
+    return f"{day_map[day]} {month} {year}"
+
+
+def generate_entities():
     return {
-        "id": uid,
-        "text": final_string,
-        "entities": final_entities
+        "CREDIT_CARD": spelled_out_digits(random.choice([14, 15, 16])),
+        "PHONE": spelled_out_digits(10),
+        "EMAIL": random_email(),
+        "PERSON_NAME": random.choice(NAMES),
+        "DATE": random_date(),
+        "CITY": random.choice(CITY_LIST),
+        "LOCATION": random.choice(LOCATION_LIST)
     }
 
-def write_jsonl(filename, num_samples):
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
-    with open(filename, "w", encoding="utf-8") as f:
-        for i in tqdm(range(num_samples), desc=f"Writing {filename}"):
-            data = generate_sample(f"utt_{i:04d}")
-            f.write(json.dumps(data) + "\n")
+# ----------------------------------------------------
+# TEMPLATES
+# ----------------------------------------------------
 
-if __name__ == "__main__":
-    print(f"Generating Data in '{OUTPUT_DIR}'...")
-    write_jsonl(f"{OUTPUT_DIR}/train.jsonl", TRAIN_SIZE)
-    write_jsonl(f"{OUTPUT_DIR}/dev.jsonl", DEV_SIZE)
-    write_jsonl(f"{OUTPUT_DIR}/test.jsonl", TEST_SIZE)
-    print("Data generation complete.")
+TEMPLATES = [
+    "my email is {EMAIL}",
+    "my phone number is {PHONE}",
+    "my credit card number is {CREDIT_CARD}",
+    "i spoke to {PERSON_NAME} yesterday",
+    "the meeting is on {DATE}",
+    "please deliver to {CITY}",
+    "the location is {LOCATION}",
+    "{PERSON_NAME} contacted me on {DATE}",
+    "my phone is {PHONE} and email is {EMAIL}",
+    "ship the item to {LOCATION} in {CITY}",
+    "i met {PERSON_NAME} in {CITY} on {DATE}",
+    "reach me at {PHONE} or email me at {EMAIL}",
+    "i need to update my card it is {CREDIT_CARD}",
+]
+
+# ----------------------------------------------------
+# EXAMPLE GENERATORS (LABELED + UNLABELED)
+# ----------------------------------------------------
+
+def make_labeled_example(idx):
+    template = random.choice(TEMPLATES)
+    ent_vals = generate_entities()
+
+    # Insert entities & compute offsets BEFORE noise
+    text = template
+    entities = []
+
+    for ent_type, ent in ent_vals.items():
+        placeholder = "{" + ent_type + "}"
+        if placeholder in text:
+            start = text.index(placeholder)
+            text = text.replace(placeholder, ent, 1)
+            end = start + len(ent)
+            entities.append({"start": start, "end": end, "label": ent_type})
+
+    # Apply noise AFTER offsets
+    noisy_text = advanced_noise_pipeline(text).lower().strip()
+
+    return {
+        "id": f"utt_{idx:04d}",
+        "text": noisy_text,
+        "entities": entities
+    }
+
+
+def make_unlabeled_example(idx):
+    """Same distribution, but remove labels."""
+    ex = make_labeled_example(idx)
+    return {
+        "id": ex["id"],
+        "text": ex["text"],
+        "entities": []   # empty list for test set
+    }
+
+# ----------------------------------------------------
+# WRITE DATASETS
+# ----------------------------------------------------
+
+def write_jsonl(size, filename, labeled=True):
+    with open(filename, "w") as f:
+        for i in range(size):
+            if labeled:
+                ex = make_labeled_example(i)
+            else:
+                ex = make_unlabeled_example(i)
+            f.write(json.dumps(ex) + "\n")
+    print(f"Generated {size} → {filename}")
+
+
+# TRAIN + DEV + TEST
+write_jsonl(TRAIN_SIZE, os.path.join(OUTPUT_DIR, "train.jsonl"), labeled=True)
+write_jsonl(DEV_SIZE, os.path.join(OUTPUT_DIR, "dev.jsonl"), labeled=True)
+write_jsonl(TEST_SIZE, os.path.join(OUTPUT_DIR, "test.jsonl"), labeled=False)
